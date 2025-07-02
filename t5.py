@@ -479,14 +479,32 @@ class T5(nn.Module):
 
         self.to_logits = nn.Linear(dim, dec_num_tokens,bias=False)
 
+        self.decoder_start_token = 0
+        self.pad_token_id = 0
+
         # tie weights
         if tie_token_emb:
             self.encoder.token_emb.weight = self.decoder.token_emb.weight
+    
+    def shift_right(self,ids):
+        shifted_ids = torch.zeros_like(ids)
+        shifted_ids[...,1:] = ids[...,:-1]
+        shifted_ids[...,0] = self.decoder_start_token
+        shifted_ids.masked_fill(shifted_ids == -100,self.pad_token_id) 
+        return shifted_ids
 
     def forward(self, src, tgt, mask = None, context_mask = None):
         #x = x + self.pos_emb(torch.arange(x.shape[1], device = x.device))
         x = self.encoder(src, mask = mask)
-        x = self.decoder(tgt, x, mask = context_mask, context_mask = mask)
+
+        b,t = src.shape
+
+        if(tgt is None):
+            shifted_targets = torch.tensor(0).view(b,1)
+        else:
+            shifted_targets = self.shift_right(tgt)
+
+        x = self.decoder(shifted_targets, x, mask = context_mask, context_mask = mask)
         x = self.to_logits(x)
         return x
 
