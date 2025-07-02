@@ -12,6 +12,84 @@ def exists(val):
 def default(val, d):
     return val if exists(val) else d
 
+# TODO:
+# before feeding into the decoder block , 
+# for training ,the labels should be shifted to the right , pad is being added and fed into the decoder
+# for inference , only pad token is being fed 
+
+# embed dimension
+d_dim = 512 
+vocab_size = 32128
+droput = 0.1
+# use the shared embedding weights for both encoder and decoder 
+tie_token_emb = True
+
+enc_depth = 8
+enc_heads = 6
+enc_dim_head = 64
+enc_mlp_mult = 2
+
+dec_depth = 8
+dec_heads = 6
+dec_dim_head = 64
+dec_mlp_mul = 2
+
+
+def load_pretrained_weights(t5model_weights, pretrained_model_weights):
+    t5model_weights['encoder.token_emb.weight'] =  pretrained_model_weights['encoder.embed_tokens.weight']
+
+    for i in range(enc_depth):
+        if(i == 0):
+            t5model_weights['encoder.layer.0.0.fn.fn.relative_position_bias.relative_attention_bias.weight'] \
+            = pretrained_model_weights['encoder.block.0.layer.0.SelfAttention.relative_attention_bias.weight']
+
+        t5model_weights[f'encoder.layer.{i}.0.fn.norm.weight'] = pretrained_model_weights[f'encoder.block.{i}.layer.0.layer_norm.weight']
+        t5model_weights[f'encoder.layer.{i}.0.fn.fn.to_q.weight'] = pretrained_model_weights[f'encoder.block.{i}.layer.0.SelfAttention.q.weight']
+        t5model_weights[f'encoder.layer.{i}.0.fn.fn.to_k.weight'] = pretrained_model_weights[f'encoder.block.{i}.layer.0.SelfAttention.k.weight']
+        t5model_weights[f'encoder.layer.{i}.0.fn.fn.to_v.weight'] = pretrained_model_weights[f'encoder.block.{i}.layer.0.SelfAttention.v.weight']
+        t5model_weights[f'encoder.layer.{i}.0.fn.fn.to_out.weight'] = pretrained_model_weights[f'encoder.block.{i}.layer.0.SelfAttention.o.weight']
+
+        t5model_weights[f'encoder.layer.{i}.1.fn.norm.weight'] = pretrained_model_weights[f'encoder.block.{i}.layer.1.layer_norm.weight']
+        t5model_weights[f'encoder.layer.{i}.1.fn.fn.wi_0.weight'] = pretrained_model_weights[f'encoder.block.{i}.layer.1.DenseReluDense.wi_0.weight']
+        t5model_weights[f'encoder.layer.{i}.1.fn.fn.wi_1.weight'] = pretrained_model_weights[f'encoder.block.{i}.layer.1.DenseReluDense.wi_1.weight']
+        t5model_weights[f'encoder.layer.{i}.1.fn.fn.wo.weight'] = pretrained_model_weights[f'encoder.block.{i}.layer.1.DenseReluDense.wo.weight']
+        
+    for i in range(dec_depth):
+        if(i == 0):
+            t5model_weights['decoder.layer.0.0.fn.fn.relative_position_bias.relative_attention_bias.weight'] \
+                = pretrained_model_weights['decoder.block.0.layer.0.SelfAttention.relative_attention_bias.weight']
+
+        # Self attention
+        t5model_weights[f'decoder.layer.{i}.0.fn.norm.weight'] = pretrained_model_weights[f'decoder.block.{i}.layer.0.layer_norm.weight']
+        t5model_weights[f'decoder.layer.{i}.0.fn.fn.to_q.weight'] = pretrained_model_weights[f'decoder.block.{i}.layer.0.SelfAttention.q.weight']
+        t5model_weights[f'decoder.layer.{i}.0.fn.fn.to_k.weight'] = pretrained_model_weights[f'decoder.block.{i}.layer.0.SelfAttention.k.weight']
+        t5model_weights[f'decoder.layer.{i}.0.fn.fn.to_v.weight'] = pretrained_model_weights[f'decoder.block.{i}.layer.0.SelfAttention.v.weight']
+        t5model_weights[f'decoder.layer.{i}.0.fn.fn.to_out.weight'] = pretrained_model_weights[f'decoder.block.{i}.layer.0.SelfAttention.o.weight']
+
+        # Cross attention
+        t5model_weights[f'decoder.layer.{i}.1.fn.norm.weight'] = pretrained_model_weights[f'decoder.block.{i}.layer.1.layer_norm.weight']
+        t5model_weights[f'decoder.layer.{i}.1.fn.fn.to_q.weight'] = pretrained_model_weights[f'decoder.block.{i}.layer.1.EncDecAttention.q.weight']
+        t5model_weights[f'decoder.layer.{i}.1.fn.fn.to_k.weight'] = pretrained_model_weights[f'decoder.block.{i}.layer.1.EncDecAttention.k.weight']
+        t5model_weights[f'decoder.layer.{i}.1.fn.fn.to_v.weight'] = pretrained_model_weights[f'decoder.block.{i}.layer.1.EncDecAttention.v.weight']
+        t5model_weights[f'decoder.layer.{i}.1.fn.fn.to_out.weight'] = pretrained_model_weights[f'decoder.block.{i}.layer.1.EncDecAttention.o.weight']
+
+        # Feed forward 
+        t5model_weights[f'decoder.layer.{i}.2.fn.norm.weight'] =  pretrained_model_weights[f'decoder.block.{i}.layer.2.layer_norm.weight']
+        t5model_weights[f'decoder.layer.{i}.2.fn.fn.wi_0.weight'] = pretrained_model_weights[f'decoder.block.{i}.layer.2.DenseReluDense.wi_0.weight']
+        t5model_weights[f'decoder.layer.{i}.2.fn.fn.wi_1.weight'] = pretrained_model_weights[f'decoder.block.{i}.layer.2.DenseReluDense.wi_1.weight']
+        t5model_weights[f'decoder.layer.{i}.2.fn.fn.wo.weight'] = pretrained_model_weights[f'decoder.block.{i}.layer.2.DenseReluDense.wo.weight']
+        
+
+    t5model_weights[f'encoder.final_norm.weight'] =  \
+            pretrained_model_weights[f'encoder.final_layer_norm.weight']
+
+    t5model_weights[f'decoder.final_norm.weight'] =  \
+            pretrained_model_weights[f'decoder.final_layer_norm.weight']
+        
+    t5model_weights[f'to_logits.weight'] =  \
+            pretrained_model_weights[f'lm_head.weight']
+
+    return t5model_weights
 
 class Residual(nn.Module):
     def __init__(self, fn):
@@ -21,17 +99,30 @@ class Residual(nn.Module):
     def forward(self, x, **kwargs):
         return self.fn(x, **kwargs) + x
 
-# pre-normalization wrapper
-# they use layernorm without bias
-
 class T5LayerNorm(nn.Module):
-    def __init__(self, dim):
+    def __init__(self, hidden_size, eps=1e-6):
+        """
+        Construct a layernorm module in the T5 style. No bias and no subtraction of mean.
+        """
         super().__init__()
-        self.gamma = nn.Parameter(torch.ones(dim))
-        self.register_buffer("beta", torch.zeros(dim))
+        self.weight = nn.Parameter(torch.ones(hidden_size))
+        self.variance_epsilon = eps
 
-    def forward(self, x):
-        return F.layer_norm(x, x.shape[-1:], self.gamma, self.beta)
+    def forward(self, hidden_states):
+        # T5 uses a layer_norm which only scales and doesn't shift, which is also known as Root Mean
+        # Square Layer Normalization https://huggingface.co/papers/1910.07467 thus variance is calculated
+        # w/o mean and there is no bias. Additionally we want to make sure that the accumulation for
+        # half-precision inputs is done in fp32
+
+        variance = hidden_states.to(torch.float32).pow(2).mean(-1, keepdim=True)
+        hidden_states = hidden_states * torch.rsqrt(variance + self.variance_epsilon)
+
+        # convert into half-precision if necessary
+        if self.weight.dtype in [torch.float16, torch.bfloat16]:
+            hidden_states = hidden_states.to(self.weight.dtype)
+
+        return self.weight * hidden_states
+
 
 class PreNorm(nn.Module):
     def __init__(self, dim, fn):
@@ -43,20 +134,24 @@ class PreNorm(nn.Module):
         return self.fn(self.norm(x), **kwargs)
 
 # feedforward layer
-
 class FeedForward(nn.Module):
     def __init__(self, dim, mult = 4, dropout = 0.):
         super().__init__()
         inner_dim = int(dim * mult)
-        self.net = nn.Sequential(
-            nn.Linear(dim, inner_dim),
-            nn.ReLU(),
-            nn.Dropout(dropout), # optional dropout
-            nn.Linear(inner_dim, dim),
-            nn.Dropout(dropout))
+        self.wi_0 = nn.Linear(dim,inner_dim,bias=False)
+        self.wi_1 = nn.Linear(dim,inner_dim,bias=False)
+        self.wo = nn.Linear(inner_dim,dim,bias=False)
+        self.dropout = nn.Dropout(dropout)
+        self.act = nn.ReLU()
 
     def forward(self, x):
-        return self.net(x)
+        hidden_relu = self.act(self.wi_0(x))
+        hidden_linear = self.wi_1(x)
+        x = hidden_relu * hidden_linear 
+        x = self.dropout(x)
+        x = self.wo(x)
+        return x
+
 
 # T5 relative positional bias
 
@@ -128,7 +223,7 @@ class T5SelfAttention(nn.Module):
         self.to_q = nn.Linear(dim, inner_dim, bias = False)
         self.to_k = nn.Linear(dim, inner_dim, bias = False)
         self.to_v = nn.Linear(dim, inner_dim, bias = False)
-        self.to_out = nn.Linear(inner_dim, dim)
+        self.to_out = nn.Linear(inner_dim, dim,bias=False)
 
         if(relative_position_bias):
             self.relative_position_bias = T5RelativePositionBias(scale = dim_head ** -0.5, causal = causal,heads = heads)
@@ -198,7 +293,7 @@ class T5CrossAttention(nn.Module):
         self.to_q = nn.Linear(dim, inner_dim, bias = False)
         self.to_k = nn.Linear(context_dim, inner_dim, bias = False)
         self.to_v = nn.Linear(context_dim, inner_dim, bias = False)
-        self.to_out = nn.Linear(inner_dim, dim)
+        self.to_out = nn.Linear(inner_dim, dim,bias=False)
 
         # self.relative_position_bias = T5RelativePositionBias(
         #     scale = dim_head ** -0.5,
@@ -271,8 +366,7 @@ class T5Encoder(nn.Module):
         #self.pos_emb = nn.Embedding(max_seq_len, dim)
 
         self.layer = nn.ModuleList([])
-        for i in range(depth):
-            self.layer.append(nn.ModuleList([
+        for i in range(depth): self.layer.append(nn.ModuleList([
                 Residual(PreNorm(dim, T5SelfAttention(dim = dim, heads = heads, dim_head = dim_head, causal = causal, dropout = dropout,relative_position_bias=bool(i==0)))),
                 Residual(PreNorm(dim, FeedForward(dim = dim, mult = mlp_mult, dropout = dropout))),
             ]))
@@ -281,7 +375,7 @@ class T5Encoder(nn.Module):
 
     def forward(self, x, mask = None):
         x = self.token_emb(x)
-        #x = x + self.pos_emb(torch.arange(x.shape[1], device = x.device))
+        x = self.dropout(x)
 
         for attn, mlp in self.layer:
             x = attn(x, mask = mask)
@@ -312,9 +406,9 @@ class T5Decoder(nn.Module):
         #self.pos_emb = nn.Embedding(max_seq_len, dim)
 
         self.layer = nn.ModuleList([])
-        for _ in range(depth):
+        for i in range(depth):
             self.layer.append(nn.ModuleList([
-                Residual(PreNorm(dim, T5SelfAttention(dim = dim, heads = heads, dim_head = dim_head, causal = causal, dropout = dropout))),
+                Residual(PreNorm(dim, T5SelfAttention(dim = dim, heads = heads, dim_head = dim_head, causal = causal, dropout = dropout,relative_position_bias=bool(i==0)))),
                 Residual(PreNorm(dim, T5CrossAttention(dim = dim, heads = heads, dim_head = dim_head, dropout = dropout))),
                 Residual(PreNorm(dim, FeedForward(dim = dim, mult = mlp_mult, dropout = dropout))),
             ]))
@@ -324,6 +418,7 @@ class T5Decoder(nn.Module):
 
     def forward(self, x, context, mask = None, context_mask = None):
         x = self.token_emb(x)
+        x = self.dropout(x)
         #x = x + self.pos_emb(torch.arange(x.shape[1], device = x.device))
 
         for attn, cross_attn, mlp in self.layer:
@@ -382,7 +477,7 @@ class T5(nn.Module):
             dropout = dropout
         )
 
-        self.to_logits = nn.Linear(dim, dec_num_tokens)
+        self.to_logits = nn.Linear(dim, dec_num_tokens,bias=False)
 
         # tie weights
         if tie_token_emb:
@@ -394,3 +489,6 @@ class T5(nn.Module):
         x = self.decoder(tgt, x, mask = context_mask, context_mask = mask)
         x = self.to_logits(x)
         return x
+
+
+
