@@ -12,10 +12,6 @@ def exists(val):
 def default(val, d):
     return val if exists(val) else d
 
-# TODO:
-# before feeding into the decoder block , 
-# for training ,the labels should be shifted to the right , pad is being added and fed into the decoder
-# for inference , only pad token is being fed 
 
 # embed dimension
 d_dim = 512 
@@ -154,7 +150,6 @@ class FeedForward(nn.Module):
 
 
 # T5 relative positional bias
-
 class T5RelativePositionBias(nn.Module):
     def __init__(self, scale, causal = False, num_buckets = 32, max_distance = 128, heads = 12):
         super().__init__()
@@ -225,6 +220,8 @@ class T5SelfAttention(nn.Module):
         self.to_v = nn.Linear(dim, inner_dim, bias = False)
         self.to_out = nn.Linear(inner_dim, dim,bias=False)
 
+        self.rel_pos_bias = relative_position_bias
+
         if(relative_position_bias):
             self.relative_position_bias = T5RelativePositionBias(scale = dim_head ** -0.5, causal = causal,heads = heads)
 
@@ -240,7 +237,8 @@ class T5SelfAttention(nn.Module):
 
         sim = torch.einsum('b h i d, b h j d -> b h i j', q, k) # (b, h, n, n)
 
-        sim = self.relative_position_bias(sim)
+        if(self.rel_pos_bias):
+            sim = self.relative_position_bias(sim)
 
         # mask (b, n)
 
@@ -255,20 +253,16 @@ class T5SelfAttention(nn.Module):
             sim = sim.masked_fill(causal_mask, mask_value)
 
         # attention
-
         attn = sim.softmax(dim = -1)
         attn = self.dropout(attn)
 
         # aggregate
-
         out = torch.einsum('b h i j, b h j d -> b h i d', attn, v)
         
         # merge heads
-
         out = rearrange(out, 'b h n d -> b n (h d)')
         
         # combine heads and linear output
-
         return self.to_out(out)
 
 # T5 Cross Attention
@@ -357,7 +351,7 @@ class T5Encoder(nn.Module):
         depth,
         heads = 12,
         dim_head = 64,
-        causal = False,
+        causal = True,
         mlp_mult = 4,
         dropout = 0.
     ):
@@ -491,22 +485,59 @@ class T5(nn.Module):
         shifted_ids[...,1:] = ids[...,:-1]
         shifted_ids[...,0] = self.decoder_start_token
         shifted_ids.masked_fill(shifted_ids == -100,self.pad_token_id) 
-        return shifted_ids
 
-    def forward(self, src, tgt, mask = None, context_mask = None):
-        #x = x + self.pos_emb(torch.arange(x.shape[1], device = x.device))
-        x = self.encoder(src, mask = mask)
+        decoder_attention_mask = (shifted_ids != self.pad_token_id).long()
+        decoder_attention_mask[...,0] = 1
+        return shifted_ids,decoder_attention_mask
+
+    def generate(self, src, src_mask=None, max_length=50, eos_token_id=1):
+        # Step 1: encode input
+        encoder_output = self.encoder(src, mask=src_mask)
+
+        b,_ = src.shape
+        device = src.device
+
+        # Step 2: start with <pad> or <bos> token
+        generated = torch.full((b, 1), 0, dtype=torch.long, device=device)  # assuming 0 is <pad>/<bos>
+
+        for _ in range(max_length):
+            # Step 3: decoder forward pass
+            x = self.decoder(generated, encoder_output, context_mask=src_mask)
+
+            # Step 4: get next token logits
+            logits = self.to_logits(x)  # shape: (b, t, vocab_size)
+            next_token_logits = logits[:, -1, :]  # only the last token's logits
+
+            # Step 5: greedy decoding (argmax)
+            next_token = torch.argmax(next_token_logits, dim=-1, keepdim=True)  # shape: (b, 1)
+
+            # Step 6: append to generated sequence
+            generated = torch.cat([generated, next_token], dim=1)
+
+            # Step 7: stop if eos_token is predicted in all sequences
+            if (next_token == eos_token_id).all():
+                break
+
+        return generated[:, 1:]  # remove the initial start token
+    
+
+    def forward(self, src, tgt=None, src_mask = None, tgt_mask = None):
+
+        x = self.encoder(src, mask = src_mask)
 
         b,t = src.shape
 
         if(tgt is None):
-            shifted_targets = torch.tensor(0).view(b,1)
+            return self.generate(src,src_mask)
         else:
-            shifted_targets = self.shift_right(tgt)
+            shifted_targets ,decoder_attention_mask= self.shift_right(tgt)
+            x = self.decoder(shifted_targets, x, mask = decoder_attention_mask, context_mask = src_mask)
 
-        x = self.decoder(shifted_targets, x, mask = context_mask, context_mask = mask)
         x = self.to_logits(x)
-        return x
+
+        loss = F.cross_entropy(x.view(-1,x.shape[-1]),tgt.view(-1,tgt.shape[-1]),ignore_index=-100)
+        return x,loss
+
 
 
 
