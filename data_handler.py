@@ -37,9 +37,7 @@ def collate_fn(batch):
 
    label_padded = torch.nn.utils.rnn.pad_sequence(labels,batch_first=True,padding_value=tokenizer.pad_token_id)
 
-   label_attention_mask = label_padded.ne(tokenizer.pad_token_id).long()
-
    label_padded[label_padded == tokenizer.pad_token_id] = -100
 
    return {'input_ids':input_padded,'input_attention_mask':input_attention_mask,
-           'label_ids':label_padded,'label_attention_mask': label_attention_mask}
+           'labels':label_padded}

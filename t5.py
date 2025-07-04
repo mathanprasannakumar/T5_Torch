@@ -13,28 +13,12 @@ def default(val, d):
     return val if exists(val) else d
 
 
-# embed dimension
-d_dim = 512 
-vocab_size = 32128
-droput = 0.1
-# use the shared embedding weights for both encoder and decoder 
-tie_token_emb = True
-
-enc_depth = 8
-enc_heads = 6
-enc_dim_head = 64
-enc_mlp_mult = 2
-
-dec_depth = 8
-dec_heads = 6
-dec_dim_head = 64
-dec_mlp_mul = 2
-
 
 def load_pretrained_weights(t5model_weights, pretrained_model_weights):
     t5model_weights['encoder.token_emb.weight'] =  pretrained_model_weights['encoder.embed_tokens.weight']
 
-    for i in range(enc_depth):
+    # enc_depth = 8
+    for i in range(8):
         if(i == 0):
             t5model_weights['encoder.layer.0.0.fn.fn.relative_position_bias.relative_attention_bias.weight'] \
             = pretrained_model_weights['encoder.block.0.layer.0.SelfAttention.relative_attention_bias.weight']
@@ -49,8 +33,9 @@ def load_pretrained_weights(t5model_weights, pretrained_model_weights):
         t5model_weights[f'encoder.layer.{i}.1.fn.fn.wi_0.weight'] = pretrained_model_weights[f'encoder.block.{i}.layer.1.DenseReluDense.wi_0.weight']
         t5model_weights[f'encoder.layer.{i}.1.fn.fn.wi_1.weight'] = pretrained_model_weights[f'encoder.block.{i}.layer.1.DenseReluDense.wi_1.weight']
         t5model_weights[f'encoder.layer.{i}.1.fn.fn.wo.weight'] = pretrained_model_weights[f'encoder.block.{i}.layer.1.DenseReluDense.wo.weight']
-        
-    for i in range(dec_depth):
+
+    # dec_depth = 8 
+    for i in range(8):
         if(i == 0):
             t5model_weights['decoder.layer.0.0.fn.fn.relative_position_bias.relative_attention_bias.weight'] \
                 = pretrained_model_weights['decoder.block.0.layer.0.SelfAttention.relative_attention_bias.weight']
@@ -245,7 +230,7 @@ class T5SelfAttention(nn.Module):
         mask_value = -torch.finfo(sim.dtype).max
 
         if mask is not None:
-            sim = sim.masked_fill_(~mask[:, None, :, None], mask_value)
+            sim = sim.masked_fill_(~(mask[:, None, :, None].bool()), mask_value)
 
         if self.causal:
             i, j = sim.shape[-2:]
@@ -317,10 +302,10 @@ class T5CrossAttention(nn.Module):
         mask_value = -torch.finfo(sim.dtype).max
 
         if mask is not None:
-            sim = sim.masked_fill_(~mask[:, None, :, None], mask_value)
+            sim = sim.masked_fill_(~(mask[:, None, :, None].bool()), mask_value)
 
         if context_mask is not None:
-            sim = sim.masked_fill_(~context_mask[:, None, None, :], mask_value)
+            sim = sim.masked_fill_(~(context_mask[:, None, None, :].bool()), mask_value)
 
         # attention
 
@@ -484,7 +469,7 @@ class T5(nn.Module):
         shifted_ids = torch.zeros_like(ids)
         shifted_ids[...,1:] = ids[...,:-1]
         shifted_ids[...,0] = self.decoder_start_token
-        shifted_ids.masked_fill(shifted_ids == -100,self.pad_token_id) 
+        shifted_ids.masked_fill_(shifted_ids == -100,self.pad_token_id) 
 
         decoder_attention_mask = (shifted_ids != self.pad_token_id).long()
         decoder_attention_mask[...,0] = 1
@@ -535,7 +520,7 @@ class T5(nn.Module):
 
         x = self.to_logits(x)
 
-        loss = F.cross_entropy(x.view(-1,x.shape[-1]),tgt.view(-1,tgt.shape[-1]),ignore_index=-100)
+        loss = F.cross_entropy(x.view(-1,x.shape[-1]),tgt.view(-1),ignore_index=-100)
         return x,loss
 
 
